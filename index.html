@@ -1,0 +1,269 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" href="data:">
+<title>リアルタイムBPM検出 with aubiojs</title>
+<style>
+:root{--fg:#111;--bg:#fff;--muted:#666;--accent:#0b84ff;--card:#f7f7f9}
+*{box-sizing:border-box}
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Sans","Noto Sans JP","Helvetica Neue",Arial}
+header{padding:20px 16px;border-bottom:1px solid #eee}
+footer{padding:20px 16px;border-top:1px solid #eee}
+main{max-width:900px;margin:0 auto;padding:16px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.card{background:var(--card);border:1px solid #eee;border-radius:16px;padding:16px}
+.btn{appearance:none;border:1px solid #ddd;background:#fff;padding:10px 14px;border-radius:12px;cursor:pointer;font-weight:600}
+.btn:hover{border-color:#ccc}
+.hint{color:var(--muted);font-size:.92rem}
+.meter{font-size:4rem;letter-spacing:1px;font-variant-numeric:tabular-nums}
+.sub{color:var(--muted)}
+.blink{width:20px;height:20px;border-radius:999px;background:#ddd;margin-left:8px;box-shadow:0 0 0 0 rgba(11,132,255,.6);transition:background 80ms ease-out}
+.blink.on{background:var(--accent);box-shadow:0 0 18px 6px rgba(11,132,255,.35)}
+.progress{height:6px;background:#eee;border-radius:999px;overflow:hidden}
+.progress>i{display:block;height:100%;width:0%}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.kvs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.kvs .card{padding:12px 14px}
+.kvs b{display:block;color:#555;font-size:.9rem;margin-bottom:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1 style="margin:0">リアルタイムBPM検出 with aubiojs</h1>
+  <div class="hint">wasm版aubiojsを使ってマイク入力 → 拍検出&BPM 表示/点滅同期</div>
+</header>
+<main>
+  <section class="card">
+    <div class="row">
+      <button id="start" class="btn">🎤 マイク開始</button>
+      <button id="stop" class="btn" disabled>停止</button>
+      <label class="hint"></label>
+    </div>
+    <div style="margin-top:16px" class="row">
+      <div class="meter" id="bpm">--.-</div>
+      <div class="blink" id="blink"></div>
+    </div>
+    <div class="sub">瞬時BPM移動平均:<span class="mono" id="bpmAvg">-</span></div>
+    <div style="margin-top:10px" class="row">
+      <label>感度(しきい値補助)
+        <input id="sens" type="range" min="0" max="100" value="50" />
+      </label>
+      <span id="sensval" class="hint">50</span>
+    </div>
+    <div style="margin-top:10px" class="row">
+      <label>窓長
+        <select id="win">
+          <option value="1024" selected>1024</option>
+          <option value="2048">2048</option>
+          <option value="4096">4096</option>
+        </select>
+      </label>
+      <label>ホップ
+        <select id="hop">
+          <option value="256">256</option>
+          <option value="512" selected>512</option>
+          <option value="1024">1024</option>
+        </select>
+      </label>
+      <label>SR
+        <select id="sr">
+          <option value="44100" selected>44100</option>
+          <option value="48000">48000</option>
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <section class="kvs" style="margin-top:16px">
+    <div class="card">
+      <b>最近の拍(秒)</b>
+      <div id="beats" class="mono" style="white-space:pre;overflow:auto;max-height:120px">-</div>
+    </div>
+    <div class="card">
+      <b>ログ</b>
+      <div id="log" class="mono" style="white-space:pre;overflow:auto;max-height:120px"></div>
+    </div>
+    <div class="card">
+      <b>状態</b>
+      <div class="mono">win=<span id="s_win">-</span>, hop=<span id="s_hop">-</span>, sr=<span id="s_sr">-</span></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+Lib: <a href=https://github.com/qiuxiang/aubiojs>aubiojs</a>, wasm version of <a href=https://aubio.org/>aubio</a><br>
+<a href=https://github.com/code4fukui/bpmdetector/>src on GitHub</a><br>
+</footer>
+
+<script type="module">
+import aubio from 'https://code4fukui.github.io/aubiojs/aubio.esm.js';
+
+const { Tempo } = await aubio();
+
+// ===== UI refs =====
+const ui = {
+  start: document.getElementById('start'),
+  stop: document.getElementById('stop'),
+  bpm: document.getElementById('bpm'),
+  bpmAvg: document.getElementById('bpmAvg'),
+  blink: document.getElementById('blink'),
+  beats: document.getElementById('beats'),
+  log: document.getElementById('log'),
+  win: document.getElementById('win'),
+  hop: document.getElementById('hop'),
+  sr: document.getElementById('sr'),
+  s_win: document.getElementById('s_win'),
+  s_hop: document.getElementById('s_hop'),
+  s_sr: document.getElementById('s_sr'),
+  sens: document.getElementById('sens'),
+  sensval: document.getElementById('sensval'),
+};
+
+// ===== Parameters (defaults) =====
+let WIN = parseInt(ui.win.value, 10);
+let HOP = parseInt(ui.hop.value, 10);
+let TARGET_SR = parseInt(ui.sr.value, 10);
+const MA = 6; // 移動平均の窓
+
+// ===== State =====
+let audioCtx = null;
+let proc = null;
+let stream = null;
+let tempo = null;
+let lastBeatSec = null;
+const recentBeats = [];
+const bpmBuf = [];
+
+function log(){
+  ui.log.textContent += Array.from(arguments).join(' ') + "\n";
+  ui.log.scrollTop = ui.log.scrollHeight;
+}
+
+function resetDisplay(){
+  ui.bpm.textContent = '--.-';
+  ui.bpmAvg.textContent = '-';
+  ui.beats.textContent = '-';
+  lastBeatSec = null;
+  recentBeats.length = 0;
+  bpmBuf.length = 0;
+}
+
+function setStatus(){
+  ui.s_win.textContent = WIN;
+  ui.s_hop.textContent = HOP;
+  ui.s_sr.textContent = TARGET_SR;
+}
+
+function blink(){
+  ui.blink.classList.add('on');
+  setTimeout(() => ui.blink.classList.remove('on'), 100);
+}
+
+function onBeat(now){
+  blink();
+  if (lastBeatSec != null) {
+    const dt = now - lastBeatSec;
+    if (dt > 0.15 && dt < 2.5) { // 24-400 BPM の範囲
+      const bpm = 60 / dt;
+      bpmBuf.push(bpm);
+      if (bpmBuf.length > MA) bpmBuf.shift();
+      const avg = bpmBuf.reduce((a,b)=>a+b,0)/bpmBuf.length;
+      ui.bpm.textContent = avg.toFixed(1);
+      ui.bpmAvg.textContent = bpmBuf.map(x=>x.toFixed(1)).join(', ');
+    }
+    //recentBeats.push(now);
+    recentBeats.push(dt);
+    const txt = recentBeats.slice(-5).map(t=>t.toFixed(3)).join(', ');
+    ui.beats.textContent = txt || '-';
+  }
+  lastBeatSec = now;
+}
+
+function buildWorklet(){
+  const code = `
+    class RB { constructor(cap){ this.b=new Float32Array(cap); this.w=0; this.cap=cap; this.fill=0; }
+      push(x){const n=x.length,b=this.b;let w=this.w;const r=this.cap-w; if(n<=r){b.set(x,w); w+=n;} else {b.set(x.subarray(0,r),w); b.set(x.subarray(r)); w=n-r;} this.w=w%this.cap; this.fill=Math.min(this.fill+n,this.cap);} 
+      snapshot(win){ if(this.fill<win) return null; const b=this.b,cap=this.cap,w=this.w; const start=(w-win+cap)%cap; const out=new Float32Array(win); if(start+win<=cap){ out.set(b.subarray(start,start+win),0);} else { const p=cap-start; out.set(b.subarray(start),0); out.set(b.subarray(0,win-p),p);} return out; }
+    }
+    class W extends AudioWorkletProcessor{
+      constructor(options){ super(); const o=options.processorOptions||{}; this.win=o.win||1024; this.hop=o.hop||512; this.rb=new RB(this.win*4); this.hopCount=0; }
+      process(inputs){ const ch0=inputs[0][0]; if(ch0&&ch0.length){ this.rb.push(ch0); this.hopCount+=ch0.length; while(this.hopCount>=this.hop){ const frame=this.rb.snapshot(this.win); if(frame){ this.port.postMessage({t:'f',buf:frame.buffer},[frame.buffer]); } this.hopCount-=this.hop; } } return true; }
+    }
+    registerProcessor('aubiojs-tempo-worklet', W);
+  `;
+  const url = URL.createObjectURL(new Blob([code], {type:'text/javascript'}));
+  return url;
+}
+
+async function start(){
+  ui.start.disabled = true;
+  ui.stop.disabled = false;
+  try{
+    resetDisplay();
+    WIN = parseInt(ui.win.value, 10);
+    HOP = parseInt(ui.hop.value, 10);
+    TARGET_SR = parseInt(ui.sr.value, 10);
+    setStatus();
+
+
+    // 2) audio
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate: TARGET_SR });
+    stream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:false, noiseSuppression:false, autoGainControl:false, sampleRate: TARGET_SR }, video:false });
+    const src = audioCtx.createMediaStreamSource(stream);
+
+    // 1) aubiojs 初期化(UMD: window.aubio or window.Aubio)
+    //const factory = window.aubio || window.Aubio;
+    //if (!factory) throw new Error('aubiojs が読み込めていません(CDNパスを確認)');
+    //aubio = await factory();
+    tempo = new Tempo(WIN, HOP, audioCtx.sampleRate); // , TARGET_SR);
+    log('aubiojs ready');
+
+    // 3) worklet
+    const url = buildWorklet();
+    await audioCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    proc = new AudioWorkletNode(audioCtx,'aubiojs-tempo-worklet',{ processorOptions:{ win:WIN, hop:HOP }});
+    proc.port.onmessage = (ev)=>{
+      if (ev.data?.t==='f'){
+        const frame = new Float32Array(ev.data.buf);
+        // 感度補助: 小さすぎる信号を少し持ち上げ/正規化する簡易処理
+        const sens = parseInt(ui.sens.value,10); // 0..100
+        if (sens !== 50){
+          const k = 1 + (sens-50)/50; // 0~2 の係数
+          for(let i=0;i<frame.length;i++){ frame[i] *= k; }
+        }
+        const onset = tempo.do(frame);
+        if (onset) onBeat(audioCtx.currentTime);
+      }
+    };
+    src.connect(proc).connect(audioCtx.destination);
+    log('mic running…');
+  }catch(err){
+    console.error(err); log('ERR:', err.message||err);
+    stop();
+  }
+}
+
+function stop(){
+  try{
+    if (proc){ try{proc.disconnect();}catch{}};
+    if (stream){ try{stream.getTracks().forEach(t=>t.stop());}catch{}};
+    if (audioCtx){ try{audioCtx.close();}catch{}};
+  } finally {
+    proc=null; stream=null; audioCtx=null; tempo=null; // aubio は再利用可
+  }
+  ui.start.disabled = false;
+  ui.stop.disabled = true;
+  log('stopped');
+}
+
+// ===== UI events =====
+ui.start.addEventListener('click', start);
+ui.stop.addEventListener('click', stop);
+ui.win.addEventListener('change', setStatus);
+ui.hop.addEventListener('change', setStatus);
+ui.sr.addEventListener('change', setStatus);
+ui.sens.addEventListener('input', ()=>{ ui.sensval.textContent = ui.sens.value; });
+
+setStatus();
+log('ready.'); // ' HTTPS 環境で開いてください(localhost でもOK)');
+</script>
+</body>
+</html>
