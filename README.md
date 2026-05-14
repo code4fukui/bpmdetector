@@ -1,11 +1,25 @@
 # bpmdetector
 
+> 日本語のREADMEはこちらです: [README.ja.md](README.ja.md)
+
+A real-time BPM detection web app using the aubiojs library, a WASM version of the aubio audio processing library.
+
+## Demo
 https://code4fukui.github.io/bpmdetecor/
 
-## reference
+## Features
+- Real-time BPM detection from microphone input
+- Visualizes the detected beats with a blinking indicator
+- Provides average BPM and recent beat timestamps
+- Allows adjusting detection parameters like window size, hop size, and sample rate
 
-- Lib: <a href=https://github.com/qiuxiang/aubiojs>aubiojs</a>, wasm version of <a href=https://aubio.org/>aubio</a> (GPL-3.0 license)<br>
+## Requirements
+This web app runs in modern web browsers and requires access to the user's microphone.
 
-## Acknowledgements
+## Usage
+1. Click the "Start microphone" button to begin BPM detection.
+2. Adjust the detection parameters as needed using the provided controls.
+3. The current BPM and recent beat timestamps will be displayed.
 
-This project uses [aubio](https://aubio.org/), which is distributed under the GPL-3.0 license.
+## License
+MIT License — see [LICENSE](LICENSE).
