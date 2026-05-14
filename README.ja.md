@@ -3,7 +3,7 @@
 aubio音声処理ライブラリのWASM版であるaubiojsライブラリを使用した、リアルタイムBPM検出Webアプリです。
 
 ## デモ
-https://code4fukui.github.io/bpmdetecor/
+~~https://code4fukui.github.io/bpmdetecor/~~ *(unavailable)*
 
 ## 機能
 - マイク入力からのリアルタイムBPM検出

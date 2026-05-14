@@ -5,7 +5,7 @@
 A real-time BPM detection web app using the aubiojs library, a WASM version of the aubio audio processing library.
 
 ## Demo
-https://code4fukui.github.io/bpmdetecor/
+~~https://code4fukui.github.io/bpmdetecor/~~ *(unavailable)*
 
 ## Features
 - Real-time BPM detection from microphone input
